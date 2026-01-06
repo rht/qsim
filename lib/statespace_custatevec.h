@@ -34,12 +34,16 @@ namespace qsim {
 namespace detail {
 
 template <typename FP>
-__global__ void SetStateUniformKernel(FP v, uint64_t size, FP* state) {
-  uint64_t k = uint64_t{blockIdx.x} * blockDim.x + threadIdx.x;
+__global__ void SetStateUniformKernel(unsigned dblocks, FP v, uint64_t size, FP* state) {
+  uint64_t k0 = uint64_t{blockIdx.x} * dblocks * blockDim.x + threadIdx.x;
 
-  if (k < size) {
-    state[2 * k] = v;
-    state[2 * k + 1] = 0;
+  for (unsigned db = 0; db < dblocks; ++db) {
+    uint64_t k = k0 + uint64_t{db} * blockDim.x;
+
+    if (k < size) {
+      state[2 * k] = v;
+      state[2 * k + 1] = 0;
+    }
   }
 }
 
@@ -99,11 +103,12 @@ class StateSpaceCuStateVec :
     uint64_t size = uint64_t{1} << state.num_qubits();
 
     unsigned threads = size < 256 ? size : 256;
-    unsigned blocks = size / threads;
+    unsigned dblocks = std::min(size / threads, uint64_t{16});
+    unsigned blocks = size / (threads * dblocks);
 
     fp_type v = double{1} / std::sqrt(size);
 
-    detail::SetStateUniformKernel<<<blocks, threads>>>(v, size, state.get());
+    detail::SetStateUniformKernel<<<blocks, threads>>>(dblocks, v, size, state.get());
     ErrorCheck(cudaPeekAtLastError());
   }
 

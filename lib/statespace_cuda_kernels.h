@@ -214,87 +214,122 @@ __global__ void Reduce2Kernel(
 }
 
 template <typename FP, unsigned warp_size = 32>
-__global__ void InternalToNormalOrderKernel(FP* state) {
+__global__ void InternalToNormalOrderKernel(unsigned dblocks, FP* state) {
   unsigned lane = threadIdx.x % warp_size;
   unsigned l = 2 * threadIdx.x - lane;
-  uint64_t k = 2 * uint64_t{blockIdx.x} * blockDim.x + l;
+  uint64_t k0 = 2 * uint64_t{blockIdx.x} * dblocks * blockDim.x + l;
 
   extern __shared__ float shared[];
   FP* buf = (FP*) shared;
 
-  buf[l] = state[k];
-  buf[l + warp_size] = state[k + warp_size];
+  for (unsigned db = 0; db < dblocks; ++db) {
+    uint64_t k = k0 + 2 * uint64_t{db} * blockDim.x;
 
-  __syncthreads();
+    buf[l] = state[k];
+    buf[l + warp_size] = state[k + warp_size];
 
-  state[k + lane] = buf[l];
-  state[k + lane + 1] = buf[l + warp_size];
+    __syncthreads();
+
+    state[k + lane] = buf[l];
+    state[k + lane + 1] = buf[l + warp_size];
+
+    __syncthreads();
+  }
 }
 
 template <typename FP, unsigned warp_size = 32>
-__global__ void NormalToInternalOrderKernel(FP* state) {
+__global__ void NormalToInternalOrderKernel(unsigned dblocks, FP* state) {
   unsigned lane = threadIdx.x % warp_size;
   unsigned l = 2 * threadIdx.x - lane;
-  uint64_t k = 2 * uint64_t{blockIdx.x} * blockDim.x + l;
+  uint64_t k0 = 2 * uint64_t{blockIdx.x} * dblocks * blockDim.x + l;
 
   extern __shared__ float shared[];
   FP* buf = (FP*) shared;
 
-  buf[l] = state[k];
-  buf[l + warp_size] = state[k + warp_size];
+  for (unsigned db = 0; db < dblocks; ++db) {
+    uint64_t k = k0 + 2 * uint64_t{db} * blockDim.x;
 
-  __syncthreads();
+    buf[l] = state[k];
+    buf[l + warp_size] = state[k + warp_size];
 
-  state[k] = buf[l + lane];
-  state[k + warp_size] = buf[l + lane + 1];
+    __syncthreads();
+
+    state[k] = buf[l + lane];
+    state[k + warp_size] = buf[l + lane + 1];
+
+    __syncthreads();
+  }
 }
 
 template <typename FP, unsigned warp_size = 32>
-__global__ void SetStateUniformKernel(FP v, uint64_t size, FP* state) {
+__global__ void SetStateUniformKernel(unsigned dblocks, FP v, uint64_t size, FP* state) {
   unsigned lane = threadIdx.x % warp_size;
-  uint64_t k = 2 * (uint64_t{blockIdx.x} * blockDim.x + threadIdx.x) - lane;
+  uint64_t k0 = 2 * (uint64_t{blockIdx.x} * dblocks * blockDim.x + threadIdx.x) - lane;
 
-  state[k] = lane < size ? v : 0;
-  state[k + warp_size] = 0;
+  for (unsigned db = 0; db < dblocks; ++db) {
+    uint64_t k = k0 + 2 * uint64_t{db} * blockDim.x;
+    uint64_t idx = uint64_t{blockIdx.x} * dblocks * blockDim.x + db * blockDim.x + threadIdx.x;
+
+    state[k] = (idx * warp_size + lane) < size ? v : 0;
+    state[k + warp_size] = 0;
+  }
 }
 
 template <typename FP, unsigned warp_size = 32>
-__global__ void AddKernel(const FP* state1, FP* state2) {
-  uint64_t k = uint64_t{blockIdx.x} * blockDim.x + threadIdx.x;
-  state2[k] += state1[k];
+__global__ void AddKernel(unsigned dblocks, const FP* state1, FP* state2) {
+  uint64_t k0 = uint64_t{blockIdx.x} * dblocks * blockDim.x + threadIdx.x;
+
+  for (unsigned db = 0; db < dblocks; ++db) {
+    uint64_t k = k0 + uint64_t{db} * blockDim.x;
+    state2[k] += state1[k];
+  }
 }
 
 template <typename FP, unsigned warp_size = 32>
-__global__ void MultiplyKernel(FP a, FP* state) {
-  uint64_t k = uint64_t{blockIdx.x} * blockDim.x + threadIdx.x;
-  state[k] *= a;
+__global__ void MultiplyKernel(unsigned dblocks, FP a, FP* state) {
+  uint64_t k0 = uint64_t{blockIdx.x} * dblocks * blockDim.x + threadIdx.x;
+
+  for (unsigned db = 0; db < dblocks; ++db) {
+    uint64_t k = k0 + uint64_t{db} * blockDim.x;
+    state[k] *= a;
+  }
 }
 
 template <typename FP, unsigned warp_size = 32>
-__global__ void CollapseKernel(uint64_t mask, uint64_t bits, FP r, FP* state) {
-  uint64_t k1 = uint64_t{blockIdx.x} * blockDim.x + threadIdx.x;
-  uint64_t k2 = 2 * k1 - threadIdx.x % warp_size;
+__global__ void CollapseKernel(unsigned dblocks, uint64_t mask, uint64_t bits, FP r, FP* state) {
+  unsigned lane = threadIdx.x % warp_size;
+  uint64_t k1_base = uint64_t{blockIdx.x} * dblocks * blockDim.x + threadIdx.x;
 
-  if ((k1 & mask) == bits) {
-    state[k2] *= r;
-    state[k2 + warp_size] *= r;
-  } else {
-    state[k2] = 0;
-    state[k2 + warp_size] = 0;
+  for (unsigned db = 0; db < dblocks; ++db) {
+    uint64_t k1 = k1_base + uint64_t{db} * blockDim.x;
+    uint64_t k2 = 2 * k1 - lane;
+
+    if ((k1 & mask) == bits) {
+      state[k2] *= r;
+      state[k2 + warp_size] *= r;
+    } else {
+      state[k2] = 0;
+      state[k2 + warp_size] = 0;
+    }
   }
 }
 
 template <typename FP, unsigned warp_size = 32>
 __global__ void BulkSetAmplKernel(
-    uint64_t mask, uint64_t bits, FP re, FP im, bool exclude, FP* state) {
-  uint64_t k1 = uint64_t{blockIdx.x} * blockDim.x + threadIdx.x;
-  uint64_t k2 = 2 * k1 - threadIdx.x % warp_size;
+    unsigned dblocks, uint64_t mask, uint64_t bits, FP re, FP im, bool exclude, FP* state) {
+  unsigned lane = threadIdx.x % warp_size;
+  uint64_t k1_base = uint64_t{blockIdx.x} * dblocks * blockDim.x + threadIdx.x;
 
-  bool set = ((k1 & mask) == bits) ^ exclude;
+  for (unsigned db = 0; db < dblocks; ++db) {
+    uint64_t k1 = k1_base + uint64_t{db} * blockDim.x;
+    uint64_t k2 = 2 * k1 - lane;
 
-  if (set) {
-    state[k2] = re;
-    state[k2 + warp_size] = im;
+    bool set = ((k1 & mask) == bits) ^ exclude;
+
+    if (set) {
+      state[k2] = re;
+      state[k2 + warp_size] = im;
+    }
   }
 }
 

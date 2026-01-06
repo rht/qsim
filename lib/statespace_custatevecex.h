@@ -36,12 +36,16 @@ namespace qsim {
 namespace detail {
 
 template <typename FP>
-__global__ void SetStateKernel(FP v, uint64_t size, void* state) {
-  uint64_t k = uint64_t{blockIdx.x} * blockDim.x + threadIdx.x;
+__global__ void SetStateKernel(unsigned dblocks, FP v, uint64_t size, void* state) {
+  uint64_t k0 = uint64_t{blockIdx.x} * dblocks * blockDim.x + threadIdx.x;
 
-  if (k < size) {
-    ((FP*) state)[2 * k] = v;
-    ((FP*) state)[2 * k + 1] = 0;
+  for (unsigned db = 0; db < dblocks; ++db) {
+    uint64_t k = k0 + uint64_t{db} * blockDim.x;
+
+    if (k < size) {
+      ((FP*) state)[2 * k] = v;
+      ((FP*) state)[2 * k + 1] = 0;
+    }
   }
 }
 
@@ -88,9 +92,10 @@ class StateSpaceCuStateVecEx :
 
     auto f = [&size](unsigned i, const auto& r) {
       unsigned threads = size < 256 ? size : 256;
-      unsigned blocks = size / threads;
+      unsigned dblocks = std::min(size / threads, uint64_t{16});
+      unsigned blocks = size / (threads * dblocks);
       fp_type zero = 0.0;
-      detail::SetStateKernel<<<blocks, threads>>>(zero, size, r.device_ptr);
+      detail::SetStateKernel<<<blocks, threads>>>(dblocks, zero, size, r.device_ptr);
     };
 
     state.assign(f);
@@ -104,8 +109,9 @@ class StateSpaceCuStateVecEx :
 
     auto f = [&size, &v](unsigned i, const auto& r) {
       unsigned threads = size < 256 ? size : 256;
-      unsigned blocks = size / threads;
-      detail::SetStateKernel<<<blocks, threads>>>(v, size, r.device_ptr);
+      unsigned dblocks = std::min(size / threads, uint64_t{16});
+      unsigned blocks = size / (threads * dblocks);
+      detail::SetStateKernel<<<blocks, threads>>>(dblocks, v, size, r.device_ptr);
     };
 
     state.assign(f);

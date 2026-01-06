@@ -86,10 +86,11 @@ class StateSpaceCUDA :
     uint64_t size = MinSize(state.num_qubits()) / 2;
 
     unsigned threads = std::min(size, uint64_t{param_.num_threads});
-    unsigned blocks = size / threads;
+    unsigned dblocks = std::min(size / threads, uint64_t{param_.num_dblocks});
+    unsigned blocks = size / (threads * dblocks);
     unsigned bytes = 2 * threads * sizeof(fp_type);
 
-    InternalToNormalOrderKernel<<<blocks, threads, bytes>>>(state.get());
+    InternalToNormalOrderKernel<<<blocks, threads, bytes>>>(dblocks, state.get());
     ErrorCheck(cudaPeekAtLastError());
     ErrorCheck(cudaDeviceSynchronize());
   }
@@ -98,10 +99,11 @@ class StateSpaceCUDA :
     uint64_t size = MinSize(state.num_qubits()) / 2;
 
     unsigned threads = std::min(size, uint64_t{param_.num_threads});
-    unsigned blocks = size / threads;
+    unsigned dblocks = std::min(size / threads, uint64_t{param_.num_dblocks});
+    unsigned blocks = size / (threads * dblocks);
     unsigned bytes = 2 * threads * sizeof(fp_type);
 
-    NormalToInternalOrderKernel<<<blocks, threads, bytes>>>(state.get());
+    NormalToInternalOrderKernel<<<blocks, threads, bytes>>>(dblocks, state.get());
     ErrorCheck(cudaPeekAtLastError());
     ErrorCheck(cudaDeviceSynchronize());
   }
@@ -117,11 +119,12 @@ class StateSpaceCUDA :
     uint64_t hsize = uint64_t{1} << state.num_qubits();
 
     unsigned threads = std::min(size, uint64_t{param_.num_threads});
-    unsigned blocks = size / threads;
+    unsigned dblocks = std::min(size / threads, uint64_t{param_.num_dblocks});
+    unsigned blocks = size / (threads * dblocks);
 
     fp_type v = double{1} / std::sqrt(hsize);
 
-    SetStateUniformKernel<<<blocks, threads>>>(v, hsize, state.get());
+    SetStateUniformKernel<<<blocks, threads>>>(dblocks, v, hsize, state.get());
     ErrorCheck(cudaPeekAtLastError());
     ErrorCheck(cudaDeviceSynchronize());
   }
@@ -178,10 +181,11 @@ class StateSpaceCUDA :
     uint64_t size = MinSize(state.num_qubits()) / 2;
 
     unsigned threads = std::min(size, uint64_t{param_.num_threads});
-    unsigned blocks = size / threads;
+    unsigned dblocks = std::min(size / threads, uint64_t{param_.num_dblocks});
+    unsigned blocks = size / (threads * dblocks);
 
     BulkSetAmplKernel<<<blocks, threads>>>(
-        mask, bits, re, im, exclude, state.get());
+        dblocks, mask, bits, re, im, exclude, state.get());
     ErrorCheck(cudaPeekAtLastError());
     ErrorCheck(cudaDeviceSynchronize());
   }
@@ -195,9 +199,10 @@ class StateSpaceCUDA :
     uint64_t size = MinSize(src.num_qubits());
 
     unsigned threads = std::min(size, uint64_t{param_.num_threads});
-    unsigned blocks = size / threads;
+    unsigned dblocks = std::min(size / threads, uint64_t{param_.num_dblocks});
+    unsigned blocks = size / (threads * dblocks);
 
-    AddKernel<<<blocks, threads>>>(src.get(), dest.get());
+    AddKernel<<<blocks, threads>>>(dblocks, src.get(), dest.get());
     ErrorCheck(cudaPeekAtLastError());
     ErrorCheck(cudaDeviceSynchronize());
 
@@ -209,9 +214,10 @@ class StateSpaceCUDA :
     uint64_t size = MinSize(state.num_qubits());
 
     unsigned threads = std::min(size, uint64_t{param_.num_threads});
-    unsigned blocks = size / threads;
+    unsigned dblocks = std::min(size / threads, uint64_t{param_.num_dblocks});
+    unsigned blocks = size / (threads * dblocks);
 
-    MultiplyKernel<<<blocks, threads>>>(a, state.get());
+    MultiplyKernel<<<blocks, threads>>>(dblocks, a, state.get());
     ErrorCheck(cudaPeekAtLastError());
     ErrorCheck(cudaDeviceSynchronize());
   }
@@ -319,9 +325,10 @@ class StateSpaceCUDA :
     uint64_t size = MinSize(state.num_qubits()) / 2;
 
     unsigned threads = std::min(size, uint64_t{param_.num_threads});
-    unsigned blocks = size / threads;
+    unsigned dblocks = std::min(size / threads, uint64_t{param_.num_dblocks});
+    unsigned blocks = size / (threads * dblocks);
 
-    CollapseKernel<<<blocks, threads>>>(mr.mask, mr.bits, renorm, state.get());
+    CollapseKernel<<<blocks, threads>>>(dblocks, mr.mask, mr.bits, renorm, state.get());
     ErrorCheck(cudaPeekAtLastError());
     ErrorCheck(cudaDeviceSynchronize());
   }
