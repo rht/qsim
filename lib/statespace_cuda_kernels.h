@@ -222,7 +222,7 @@ __global__ void Reduce2Kernel(
 // of the GPU's actual wavefront/warp size.
 template <typename FP, unsigned data_warp_size = 32>
 __global__
-void InternalToNormalOrderKernel(unsigned dblocks, FP* state) {
+void InternalToNormalOrderKernel(unsigned dblocks, uint64_t size, FP* state) {
   unsigned lane = threadIdx.x % data_warp_size;
   unsigned l = 2 * threadIdx.x - lane;
   uint64_t k0 = 2 * uint64_t{blockIdx.x} * dblocks * blockDim.x + l;
@@ -233,13 +233,20 @@ void InternalToNormalOrderKernel(unsigned dblocks, FP* state) {
   for (unsigned db = 0; db < dblocks; ++db) {
     uint64_t k = k0 + 2 * uint64_t{db} * blockDim.x;
 
-    buf[l] = state[k];
-    buf[l + data_warp_size] = state[k + data_warp_size];
+    // Bounds check: all threads must participate in syncthreads, so use conditional
+    bool in_bounds = (k + data_warp_size < size);
+
+    if (in_bounds) {
+      buf[l] = state[k];
+      buf[l + data_warp_size] = state[k + data_warp_size];
+    }
 
     __syncthreads();
 
-    state[k + lane] = buf[l];
-    state[k + lane + 1] = buf[l + data_warp_size];
+    if (in_bounds) {
+      state[k + lane] = buf[l];
+      state[k + lane + 1] = buf[l + data_warp_size];
+    }
 
     __syncthreads();
   }
@@ -250,7 +257,7 @@ void InternalToNormalOrderKernel(unsigned dblocks, FP* state) {
 // of the GPU's actual wavefront/warp size.
 template <typename FP, unsigned data_warp_size = 32>
 __global__
-void NormalToInternalOrderKernel(unsigned dblocks, FP* state) {
+void NormalToInternalOrderKernel(unsigned dblocks, uint64_t size, FP* state) {
   unsigned lane = threadIdx.x % data_warp_size;
   unsigned l = 2 * threadIdx.x - lane;
   uint64_t k0 = 2 * uint64_t{blockIdx.x} * dblocks * blockDim.x + l;
@@ -261,13 +268,20 @@ void NormalToInternalOrderKernel(unsigned dblocks, FP* state) {
   for (unsigned db = 0; db < dblocks; ++db) {
     uint64_t k = k0 + 2 * uint64_t{db} * blockDim.x;
 
-    buf[l] = state[k];
-    buf[l + data_warp_size] = state[k + data_warp_size];
+    // Bounds check: all threads must participate in syncthreads, so use conditional
+    bool in_bounds = (k + data_warp_size < size);
+
+    if (in_bounds) {
+      buf[l] = state[k];
+      buf[l + data_warp_size] = state[k + data_warp_size];
+    }
 
     __syncthreads();
 
-    state[k] = buf[l + lane];
-    state[k + data_warp_size] = buf[l + lane + 1];
+    if (in_bounds) {
+      state[k] = buf[l + lane];
+      state[k + data_warp_size] = buf[l + lane + 1];
+    }
 
     __syncthreads();
   }
