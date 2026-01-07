@@ -50,6 +50,7 @@
 #define cudaMemcpy               hipMemcpy
 #define cudaMemcpyHostToDevice   hipMemcpyHostToDevice
 #define cudaMemset               hipMemset
+#define cudaGetLastError         hipGetLastError
 #define cudaPeekAtLastError      hipPeekAtLastError
 #define cudaSuccess              hipSuccess
 #define cuDoubleComplex          hipDoubleComplex

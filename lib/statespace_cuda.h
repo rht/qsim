@@ -103,10 +103,28 @@ class StateSpaceCUDA :
     if (dblocks < 1) dblocks = 1;
     unsigned blocks = size / (threads * dblocks);
 
-    fprintf(stderr, "DEBUG InternalToNormalOrder: qubits=%u size=%lu threads=%u dblocks=%u blocks=%u bytes=%lu\n",
-            state.num_qubits(), size, threads, dblocks, blocks, 2 * threads * sizeof(fp_type));
-
     unsigned bytes = 2 * threads * sizeof(fp_type);
+    fprintf(stderr, "DEBUG InternalToNormalOrder: qubits=%u size=%lu threads=%u dblocks=%u blocks=%u bytes=%u\n",
+            state.num_qubits(), size, threads, dblocks, blocks, bytes);
+
+    // Clear any previous errors
+    cudaError_t prev_err = cudaGetLastError();
+    if (prev_err != cudaSuccess) {
+      fprintf(stderr, "DEBUG: Previous error before InternalToNormalOrder: %s\n", cudaGetErrorString(prev_err));
+    }
+
+    // Test: try launching with 0 shared memory first to see if kernel exists
+    fprintf(stderr, "DEBUG: Testing kernel launch with 0 shared memory...\n");
+    InternalToNormalOrderKernel<<<1, 64, 0>>>(1, state.get());
+    cudaError_t test_err = cudaPeekAtLastError();
+    fprintf(stderr, "DEBUG: Test launch result: %s\n", cudaGetErrorString(test_err));
+
+    if (test_err != cudaSuccess) {
+      // Clear the error and try the real launch anyway to see what happens
+      cudaGetLastError();
+    }
+
+    // Now try the real launch
     InternalToNormalOrderKernel<<<blocks, threads, bytes>>>(dblocks, state.get());
     ErrorCheck(cudaPeekAtLastError());
     ErrorCheck(cudaDeviceSynchronize());
