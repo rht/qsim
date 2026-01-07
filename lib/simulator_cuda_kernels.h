@@ -30,7 +30,8 @@ namespace qsim {
 template <unsigned G, typename fp_type, typename idx_type>
 __global__ void ApplyGateH_Kernel(
     const fp_type* __restrict__ v0, const idx_type* __restrict__ xss0,
-    const idx_type* __restrict__ mss, fp_type* __restrict__ rstate) {
+    const idx_type* __restrict__ mss, unsigned num_iterations,
+    fp_type* __restrict__ rstate) {
   // blockDim.x must be equal to 64.
 
   static_assert(G < 7, "gates acting on more than 6 qubits are not supported.");
@@ -61,48 +62,51 @@ __global__ void ApplyGateH_Kernel(
 
   __syncthreads();
 
-  idx_type i = (64 * idx_type{blockIdx.x} + threadIdx.x) & 0xffffffffffe0;
-  idx_type ii = i & mss[0];
-  for (unsigned j = 1; j <= G; ++j) {
-    i *= 2;
-    ii |= i & mss[j];
-  }
-
-  auto p0 = rstate + 2 * ii + threadIdx.x % 32;
-
-  for (unsigned k = 0; k < gsize; ++k) {
-    rs[k] = *(p0 + xss[k]);
-    is[k] = *(p0 + xss[k] + 32);
-  }
-
-  for (unsigned s = 0; s < gsize / rows; ++s) {
-    if (s > 0) {
-      __syncthreads();
-
-      for (unsigned m = 0; m < 2 * gsize * rows; m += 64) {
-        v[m + threadIdx.x] = v0[m + 2 * gsize * rows * s + threadIdx.x];
-      }
-
-      __syncthreads();
+  for (unsigned iter = 0; iter < num_iterations; ++iter) {
+    idx_type eff_block = idx_type{blockIdx.x} * num_iterations + iter;
+    idx_type i = (64 * eff_block + threadIdx.x) & 0xffffffffffe0;
+    idx_type ii = i & mss[0];
+    for (unsigned j = 1; j <= G; ++j) {
+      i *= 2;
+      ii |= i & mss[j];
     }
 
-    unsigned j = 0;
+    auto p0 = rstate + 2 * ii + threadIdx.x % 32;
 
-    for (unsigned k = rows * s; k < rows * (s + 1); ++k) {
-      fp_type rn = 0;
-      fp_type in = 0;
+    for (unsigned k = 0; k < gsize; ++k) {
+      rs[k] = *(p0 + xss[k]);
+      is[k] = *(p0 + xss[k] + 32);
+    }
 
-      for (unsigned l = 0; l < gsize; ++l) {
-        fp_type rm = v[j++];
-        fp_type im = v[j++];
-        rn += rs[l] * rm;
-        rn -= is[l] * im;
-        in += rs[l] * im;
-        in += is[l] * rm;
+    for (unsigned s = 0; s < gsize / rows; ++s) {
+      if (s > 0) {
+        __syncthreads();
+
+        for (unsigned m = 0; m < 2 * gsize * rows; m += 64) {
+          v[m + threadIdx.x] = v0[m + 2 * gsize * rows * s + threadIdx.x];
+        }
+
+        __syncthreads();
       }
 
-      *(p0 + xss[k]) = rn;
-      *(p0 + xss[k] + 32) = in;
+      unsigned j = 0;
+
+      for (unsigned k = rows * s; k < rows * (s + 1); ++k) {
+        fp_type rn = 0;
+        fp_type in = 0;
+
+        for (unsigned l = 0; l < gsize; ++l) {
+          fp_type rm = v[j++];
+          fp_type im = v[j++];
+          rn += rs[l] * rm;
+          rn -= is[l] * im;
+          in += rs[l] * im;
+          in += is[l] * rm;
+        }
+
+        *(p0 + xss[k]) = rn;
+        *(p0 + xss[k] + 32) = in;
+      }
     }
   }
 }
@@ -111,7 +115,7 @@ template <unsigned G, typename fp_type, typename idx_type>
 __global__ void ApplyGateL_Kernel(
     const fp_type* __restrict__ v0, const idx_type* __restrict__ xss,
     const idx_type* __restrict__ mss, const unsigned* __restrict__ qis,
-    const unsigned* __restrict__ tis, unsigned esize,
+    const unsigned* __restrict__ tis, unsigned esize, unsigned num_iterations,
     fp_type* __restrict__ rstate) {
   // blockDim.x must be equal to 32.
 
@@ -137,63 +141,66 @@ __global__ void ApplyGateL_Kernel(
     }
   }
 
-  idx_type i = 32 * idx_type{blockIdx.x};
-  idx_type ii = i & mss[0];
-  for (unsigned j = 1; j <= G; ++j) {
-    i *= 2;
-    ii |= i & mss[j];
-  }
-
-  auto p0 = rstate + 2 * ii + threadIdx.x;
-
-  for (unsigned k = 0; k < gsize; ++k) {
-    rs0[threadIdx.x][k] = *(p0 + xss[k]);
-    is0[threadIdx.x][k] = *(p0 + xss[k] + 32);
-  }
-
-  for (unsigned k = 0; k < gsize; ++k) {
-    unsigned i = tis[threadIdx.x] | qis[k];
-    unsigned m = i & 0x1f;
-    unsigned n = i / 32;
-
-    rs[k] = rs0[m][n];
-    is[k] = is0[m][n];
-  }
-
-  for (unsigned s = 0; s < gsize / rows; ++s) {
-    if (s > 0) {
-      for (unsigned m = 0; m < 2 * gsize * rows; m += 32) {
-        v[m + threadIdx.x] = v0[m + 2 * gsize * rows * s + threadIdx.x];
-      }
+  for (unsigned iter = 0; iter < num_iterations; ++iter) {
+    idx_type eff_block = idx_type{blockIdx.x} * num_iterations + iter;
+    idx_type i = 32 * eff_block;
+    idx_type ii = i & mss[0];
+    for (unsigned j = 1; j <= G; ++j) {
+      i *= 2;
+      ii |= i & mss[j];
     }
 
-    unsigned j = 0;
+    auto p0 = rstate + 2 * ii + threadIdx.x;
 
-    for (unsigned k = rows * s; k < rows * (s + 1); ++k) {
-      fp_type rn = 0;
-      fp_type in = 0;
+    for (unsigned k = 0; k < gsize; ++k) {
+      rs0[threadIdx.x][k] = *(p0 + xss[k]);
+      is0[threadIdx.x][k] = *(p0 + xss[k] + 32);
+    }
 
-      for (unsigned l = 0; l < gsize; ++l) {
-        fp_type rm = v[j++];
-        fp_type im = v[j++];
-        rn += rs[l] * rm;
-        rn -= is[l] * im;
-        in += rs[l] * im;
-        in += is[l] * rm;
-      }
-
+    for (unsigned k = 0; k < gsize; ++k) {
       unsigned i = tis[threadIdx.x] | qis[k];
       unsigned m = i & 0x1f;
       unsigned n = i / 32;
 
-      rs0[m][n] = rn;
-      is0[m][n] = in;
+      rs[k] = rs0[m][n];
+      is[k] = is0[m][n];
     }
-  }
 
-  for (unsigned k = 0; k < esize; ++k) {
-    *(p0 + xss[k]) = rs0[threadIdx.x][k];
-    *(p0 + xss[k] + 32) = is0[threadIdx.x][k];
+    for (unsigned s = 0; s < gsize / rows; ++s) {
+      if (s > 0) {
+        for (unsigned m = 0; m < 2 * gsize * rows; m += 32) {
+          v[m + threadIdx.x] = v0[m + 2 * gsize * rows * s + threadIdx.x];
+        }
+      }
+
+      unsigned j = 0;
+
+      for (unsigned k = rows * s; k < rows * (s + 1); ++k) {
+        fp_type rn = 0;
+        fp_type in = 0;
+
+        for (unsigned l = 0; l < gsize; ++l) {
+          fp_type rm = v[j++];
+          fp_type im = v[j++];
+          rn += rs[l] * rm;
+          rn -= is[l] * im;
+          in += rs[l] * im;
+          in += is[l] * rm;
+        }
+
+        unsigned i = tis[threadIdx.x] | qis[k];
+        unsigned m = i & 0x1f;
+        unsigned n = i / 32;
+
+        rs0[m][n] = rn;
+        is0[m][n] = in;
+      }
+    }
+
+    for (unsigned k = 0; k < esize; ++k) {
+      *(p0 + xss[k]) = rs0[threadIdx.x][k];
+      *(p0 + xss[k] + 32) = is0[threadIdx.x][k];
+    }
   }
 }
 
@@ -201,7 +208,7 @@ template <unsigned G, typename fp_type, typename idx_type>
 __global__ void ApplyControlledGateH_Kernel(
     const fp_type* __restrict__ v0, const idx_type* __restrict__ xss0,
     const idx_type* __restrict__ mss, unsigned num_mss, idx_type cvalsh,
-    fp_type* __restrict__ rstate) {
+    unsigned num_iterations, fp_type* __restrict__ rstate) {
   // blockDim.x must be equal to 64.
 
   static_assert(G < 7, "gates acting on more than 6 qubits are not supported.");
@@ -232,50 +239,53 @@ __global__ void ApplyControlledGateH_Kernel(
 
   __syncthreads();
 
-  idx_type i = (64 * idx_type{blockIdx.x} + threadIdx.x) & 0xffffffffffe0;
-  idx_type ii = i & mss[0];
-  for (unsigned j = 1; j < num_mss; ++j) {
-    i *= 2;
-    ii |= i & mss[j];
-  }
-
-  ii |= cvalsh;
-
-  auto p0 = rstate + 2 * ii + threadIdx.x % 32;
-
-  for (unsigned k = 0; k < gsize; ++k) {
-    rs[k] = *(p0 + xss[k]);
-    is[k] = *(p0 + xss[k] + 32);
-  }
-
-  for (unsigned s = 0; s < gsize / rows; ++s) {
-    if (s > 0) {
-      __syncthreads();
-
-      for (unsigned m = 0; m < 2 * gsize * rows; m += 64) {
-        v[m + threadIdx.x] = v0[m + 2 * gsize * rows * s + threadIdx.x];
-      }
-
-      __syncthreads();
+  for (unsigned iter = 0; iter < num_iterations; ++iter) {
+    idx_type eff_block = idx_type{blockIdx.x} * num_iterations + iter;
+    idx_type i = (64 * eff_block + threadIdx.x) & 0xffffffffffe0;
+    idx_type ii = i & mss[0];
+    for (unsigned j = 1; j < num_mss; ++j) {
+      i *= 2;
+      ii |= i & mss[j];
     }
 
-    unsigned j = 0;
+    ii |= cvalsh;
 
-    for (unsigned k = rows * s; k < rows * (s + 1); ++k) {
-      fp_type rn = 0;
-      fp_type in = 0;
+    auto p0 = rstate + 2 * ii + threadIdx.x % 32;
 
-      for (unsigned l = 0; l < gsize; ++l) {
-        fp_type rm = v[j++];
-        fp_type im = v[j++];
-        rn += rs[l] * rm;
-        rn -= is[l] * im;
-        in += rs[l] * im;
-        in += is[l] * rm;
+    for (unsigned k = 0; k < gsize; ++k) {
+      rs[k] = *(p0 + xss[k]);
+      is[k] = *(p0 + xss[k] + 32);
+    }
+
+    for (unsigned s = 0; s < gsize / rows; ++s) {
+      if (s > 0) {
+        __syncthreads();
+
+        for (unsigned m = 0; m < 2 * gsize * rows; m += 64) {
+          v[m + threadIdx.x] = v0[m + 2 * gsize * rows * s + threadIdx.x];
+        }
+
+        __syncthreads();
       }
 
-      *(p0 + xss[k]) = rn;
-      *(p0 + xss[k] + 32) = in;
+      unsigned j = 0;
+
+      for (unsigned k = rows * s; k < rows * (s + 1); ++k) {
+        fp_type rn = 0;
+        fp_type in = 0;
+
+        for (unsigned l = 0; l < gsize; ++l) {
+          fp_type rm = v[j++];
+          fp_type im = v[j++];
+          rn += rs[l] * rm;
+          rn -= is[l] * im;
+          in += rs[l] * im;
+          in += is[l] * rm;
+        }
+
+        *(p0 + xss[k]) = rn;
+        *(p0 + xss[k] + 32) = in;
+      }
     }
   }
 }
@@ -285,7 +295,7 @@ __global__ void ApplyControlledGateLH_Kernel(
     const fp_type* __restrict__ v0, const idx_type* __restrict__ xss,
     const idx_type* __restrict__ mss, const unsigned* __restrict__ qis,
     const unsigned* __restrict__ tis, unsigned num_mss, idx_type cvalsh,
-    unsigned esize, fp_type* __restrict__ rstate) {
+    unsigned esize, unsigned num_iterations, fp_type* __restrict__ rstate) {
   // blockDim.x must be equal to 32.
 
   static_assert(G < 7, "gates acting on more than 6 qubits are not supported.");
@@ -300,22 +310,6 @@ __global__ void ApplyControlledGateLH_Kernel(
   __shared__ fp_type rs0[32][gsize + 1], is0[32][gsize + 1];
   __shared__ fp_type v[2 * gsize * rows];
 
-  idx_type i = 32 * idx_type{blockIdx.x};
-  idx_type ii = i & mss[0];
-  for (unsigned j = 1; j < num_mss; ++j) {
-    i *= 2;
-    ii |= i & mss[j];
-  }
-
-  ii |= cvalsh;
-
-  auto p0 = rstate + 2 * ii + threadIdx.x;
-
-  for (unsigned k = 0; k < gsize; ++k) {
-    rs0[threadIdx.x][k] = *(p0 + xss[k]);
-    is0[threadIdx.x][k] = *(p0 + xss[k] + 32);
-  }
-
   if (G < 2) {
     if (threadIdx.x < 2 * gsize * gsize) {
       v[threadIdx.x] = v0[threadIdx.x];
@@ -326,49 +320,68 @@ __global__ void ApplyControlledGateLH_Kernel(
     }
   }
 
-  for (unsigned k = 0; k < gsize; ++k) {
-    unsigned i = tis[threadIdx.x] | qis[k];
-    unsigned m = i & 0x1f;
-    unsigned n = i / 32;
-
-    rs[k] = rs0[m][n];
-    is[k] = is0[m][n];
-  }
-
-  for (unsigned s = 0; s < gsize / rows; ++s) {
-    if (s > 0) {
-      for (unsigned m = 0; m < 2 * gsize * rows; m += 32) {
-        v[m + threadIdx.x] = v0[m + 2 * gsize * rows * s + threadIdx.x];
-      }
+  for (unsigned iter = 0; iter < num_iterations; ++iter) {
+    idx_type eff_block = idx_type{blockIdx.x} * num_iterations + iter;
+    idx_type i = 32 * eff_block;
+    idx_type ii = i & mss[0];
+    for (unsigned j = 1; j < num_mss; ++j) {
+      i *= 2;
+      ii |= i & mss[j];
     }
 
-    unsigned j = 0;
+    ii |= cvalsh;
 
-    for (unsigned k = rows * s; k < rows * (s + 1); ++k) {
-      fp_type rn = 0;
-      fp_type in = 0;
+    auto p0 = rstate + 2 * ii + threadIdx.x;
 
-      for (unsigned l = 0; l < gsize; ++l) {
-        fp_type rm = v[j++];
-        fp_type im = v[j++];
-        rn += rs[l] * rm;
-        rn -= is[l] * im;
-        in += rs[l] * im;
-        in += is[l] * rm;
-      }
+    for (unsigned k = 0; k < gsize; ++k) {
+      rs0[threadIdx.x][k] = *(p0 + xss[k]);
+      is0[threadIdx.x][k] = *(p0 + xss[k] + 32);
+    }
 
+    for (unsigned k = 0; k < gsize; ++k) {
       unsigned i = tis[threadIdx.x] | qis[k];
       unsigned m = i & 0x1f;
       unsigned n = i / 32;
 
-      rs0[m][n] = rn;
-      is0[m][n] = in;
+      rs[k] = rs0[m][n];
+      is[k] = is0[m][n];
     }
-  }
 
-  for (unsigned k = 0; k < esize; ++k) {
-    *(p0 + xss[k]) = rs0[threadIdx.x][k];
-    *(p0 + xss[k] + 32) = is0[threadIdx.x][k];
+    for (unsigned s = 0; s < gsize / rows; ++s) {
+      if (s > 0) {
+        for (unsigned m = 0; m < 2 * gsize * rows; m += 32) {
+          v[m + threadIdx.x] = v0[m + 2 * gsize * rows * s + threadIdx.x];
+        }
+      }
+
+      unsigned j = 0;
+
+      for (unsigned k = rows * s; k < rows * (s + 1); ++k) {
+        fp_type rn = 0;
+        fp_type in = 0;
+
+        for (unsigned l = 0; l < gsize; ++l) {
+          fp_type rm = v[j++];
+          fp_type im = v[j++];
+          rn += rs[l] * rm;
+          rn -= is[l] * im;
+          in += rs[l] * im;
+          in += is[l] * rm;
+        }
+
+        unsigned i = tis[threadIdx.x] | qis[k];
+        unsigned m = i & 0x1f;
+        unsigned n = i / 32;
+
+        rs0[m][n] = rn;
+        is0[m][n] = in;
+      }
+    }
+
+    for (unsigned k = 0; k < esize; ++k) {
+      *(p0 + xss[k]) = rs0[threadIdx.x][k];
+      *(p0 + xss[k] + 32) = is0[threadIdx.x][k];
+    }
   }
 }
 
@@ -378,7 +391,7 @@ __global__ void ApplyControlledGateL_Kernel(
     const idx_type* __restrict__ mss, const unsigned* __restrict__ qis,
     const unsigned* __restrict__ tis, const idx_type* __restrict__ cis,
     unsigned num_mss, idx_type cvalsh, unsigned esize, unsigned rwthreads,
-    fp_type* __restrict__ rstate) {
+    unsigned num_iterations, fp_type* __restrict__ rstate) {
   // blockDim.x must be equal to 32.
 
   static_assert(G < 7, "gates acting on more than 6 qubits are not supported.");
@@ -393,24 +406,6 @@ __global__ void ApplyControlledGateL_Kernel(
   __shared__ fp_type rs0[32][gsize + 1], is0[32][gsize + 1];
   __shared__ fp_type v[2 * gsize * rows];
 
-  idx_type i = 32 * idx_type{blockIdx.x};
-  idx_type ii = i & mss[0];
-  for (unsigned j = 1; j < num_mss; ++j) {
-    i *= 2;
-    ii |= i & mss[j];
-  }
-
-  ii |= cvalsh;
-
-  auto p0 = rstate + 2 * ii + cis[threadIdx.x];
-
-  if (threadIdx.x < rwthreads) {
-    for (unsigned k = 0; k < gsize; ++k) {
-      rs0[threadIdx.x][k] = *(p0 + xss[k]);
-      is0[threadIdx.x][k] = *(p0 + xss[k] + 32);
-    }
-  }
-
   if (G < 2) {
     if (threadIdx.x < 2 * gsize * gsize) {
       v[threadIdx.x] = v0[threadIdx.x];
@@ -421,50 +416,71 @@ __global__ void ApplyControlledGateL_Kernel(
     }
   }
 
-  for (unsigned k = 0; k < gsize; ++k) {
-    unsigned i = tis[threadIdx.x] | qis[k];
-    unsigned m = i & 0x1f;
-    unsigned n = i / 32;
+  for (unsigned iter = 0; iter < num_iterations; ++iter) {
+    idx_type eff_block = idx_type{blockIdx.x} * num_iterations + iter;
+    idx_type i = 32 * eff_block;
+    idx_type ii = i & mss[0];
+    for (unsigned j = 1; j < num_mss; ++j) {
+      i *= 2;
+      ii |= i & mss[j];
+    }
 
-    rs[k] = rs0[m][n];
-    is[k] = is0[m][n];
-  }
+    ii |= cvalsh;
 
-  for (unsigned s = 0; s < gsize / rows; ++s) {
-    if (s > 0) {
-      for (unsigned m = 0; m < 2 * gsize * rows; m += 32) {
-        v[m + threadIdx.x] = v0[m + 2 * gsize * rows * s + threadIdx.x];
+    auto p0 = rstate + 2 * ii + cis[threadIdx.x];
+
+    if (threadIdx.x < rwthreads) {
+      for (unsigned k = 0; k < gsize; ++k) {
+        rs0[threadIdx.x][k] = *(p0 + xss[k]);
+        is0[threadIdx.x][k] = *(p0 + xss[k] + 32);
       }
     }
 
-    unsigned j = 0;
-
-    for (unsigned k = rows * s; k < rows * (s + 1); ++k) {
-      fp_type rn = 0;
-      fp_type in = 0;
-
-      for (unsigned l = 0; l < gsize; ++l) {
-        fp_type rm = v[j++];
-        fp_type im = v[j++];
-        rn += rs[l] * rm;
-        rn -= is[l] * im;
-        in += rs[l] * im;
-        in += is[l] * rm;
-      }
-
+    for (unsigned k = 0; k < gsize; ++k) {
       unsigned i = tis[threadIdx.x] | qis[k];
       unsigned m = i & 0x1f;
       unsigned n = i / 32;
 
-      rs0[m][n] = rn;
-      is0[m][n] = in;
+      rs[k] = rs0[m][n];
+      is[k] = is0[m][n];
     }
-  }
 
-  if (threadIdx.x < rwthreads) {
-    for (unsigned k = 0; k < esize; ++k) {
-      *(p0 + xss[k]) = rs0[threadIdx.x][k];
-      *(p0 + xss[k] + 32) = is0[threadIdx.x][k];
+    for (unsigned s = 0; s < gsize / rows; ++s) {
+      if (s > 0) {
+        for (unsigned m = 0; m < 2 * gsize * rows; m += 32) {
+          v[m + threadIdx.x] = v0[m + 2 * gsize * rows * s + threadIdx.x];
+        }
+      }
+
+      unsigned j = 0;
+
+      for (unsigned k = rows * s; k < rows * (s + 1); ++k) {
+        fp_type rn = 0;
+        fp_type in = 0;
+
+        for (unsigned l = 0; l < gsize; ++l) {
+          fp_type rm = v[j++];
+          fp_type im = v[j++];
+          rn += rs[l] * rm;
+          rn -= is[l] * im;
+          in += rs[l] * im;
+          in += is[l] * rm;
+        }
+
+        unsigned i = tis[threadIdx.x] | qis[k];
+        unsigned m = i & 0x1f;
+        unsigned n = i / 32;
+
+        rs0[m][n] = rn;
+        is0[m][n] = in;
+      }
+    }
+
+    if (threadIdx.x < rwthreads) {
+      for (unsigned k = 0; k < esize; ++k) {
+        *(p0 + xss[k]) = rs0[threadIdx.x][k];
+        *(p0 + xss[k] + 32) = is0[threadIdx.x][k];
+      }
     }
   }
 }

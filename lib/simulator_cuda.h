@@ -346,12 +346,22 @@ class SimulatorCUDA final {
     unsigned n = num_qubits > k ? num_qubits - k : 0;
     unsigned size = unsigned{1} << n;
     unsigned threads = 64U;
+
+    // Limit blocks to avoid "invalid configuration" on HIP/AMD
+#ifdef __HIP__
+    constexpr unsigned max_blocks = 65535;
+    unsigned raw_blocks = std::max(1U, size / 2);
+    unsigned num_iterations = (raw_blocks + max_blocks - 1) / max_blocks;
+    unsigned blocks = (raw_blocks + num_iterations - 1) / num_iterations;
+#else
     unsigned blocks = std::max(1U, size / 2);
+    unsigned num_iterations = 1;
+#endif
 
     IndicesH<G> d_i(d_ws);
 
     ApplyGateH_Kernel<G><<<blocks, threads>>>(
-        (fp_type*) d_ws, d_i.xss, d_i.ms, state.get());
+        (fp_type*) d_ws, d_i.xss, d_i.ms, num_iterations, state.get());
   }
 
   template <unsigned G>
@@ -370,13 +380,22 @@ class SimulatorCUDA final {
     unsigned n = num_qubits > k ? num_qubits - k : 0;
     unsigned size = unsigned{1} << n;
     unsigned threads = 32;
+
+    // Limit blocks to avoid "invalid configuration" on HIP/AMD
+#ifdef __HIP__
+    constexpr unsigned max_blocks = 65535;
+    unsigned num_iterations = (size + max_blocks - 1) / max_blocks;
+    unsigned blocks = (size + num_iterations - 1) / num_iterations;
+#else
     unsigned blocks = size;
+    unsigned num_iterations = 1;
+#endif
 
     IndicesL<G> d_i(d_ws);
 
     ApplyGateL_Kernel<G><<<blocks, threads>>>(
         (fp_type*) d_ws, d_i.xss, d_i.ms, d_i.qis, d_i.tis,
-        1 << num_effective_qs, state.get());
+        1 << num_effective_qs, num_iterations, state.get());
   }
 
   template <unsigned G>
@@ -403,12 +422,21 @@ class SimulatorCUDA final {
     unsigned n = num_qubits > k ? num_qubits - k : 0;
     unsigned size = unsigned{1} << n;
     unsigned threads = 64U;
+
+#ifdef __HIP__
+    constexpr unsigned max_blocks = 65535;
+    unsigned raw_blocks = std::max(1U, size / 2);
+    unsigned num_iterations = (raw_blocks + max_blocks - 1) / max_blocks;
+    unsigned blocks = (raw_blocks + num_iterations - 1) / num_iterations;
+#else
     unsigned blocks = std::max(1U, size / 2);
+    unsigned num_iterations = 1;
+#endif
 
     IndicesH<G> d_i(d_ws);
 
     ApplyControlledGateH_Kernel<G><<<blocks, threads>>>(
-        (fp_type*) d_ws, d_i.xss, d_i.ms, num_aqs + 1, cvalsh, state.get());
+        (fp_type*) d_ws, d_i.xss, d_i.ms, num_aqs + 1, cvalsh, num_iterations, state.get());
   }
 
   template <unsigned G>
@@ -428,13 +456,21 @@ class SimulatorCUDA final {
     unsigned n = num_qubits > k ? num_qubits - k : 0;
     unsigned size = unsigned{1} << n;
     unsigned threads = 32;
+
+#ifdef __HIP__
+    constexpr unsigned max_blocks = 65535;
+    unsigned num_iterations = (size + max_blocks - 1) / max_blocks;
+    unsigned blocks = (size + num_iterations - 1) / num_iterations;
+#else
     unsigned blocks = size;
+    unsigned num_iterations = 1;
+#endif
 
     IndicesL<G> d_i(d_ws);
 
     ApplyControlledGateLH_Kernel<G><<<blocks, threads>>>(
         (fp_type*) d_ws, d_i.xss, d_i.ms, d_i.qis, d_i.tis,
-        d.num_aqs + 1, d.cvalsh, 1 << d.num_effective_qs, state.get());
+        d.num_aqs + 1, d.cvalsh, 1 << d.num_effective_qs, num_iterations, state.get());
   }
 
   template <unsigned G>
@@ -454,14 +490,22 @@ class SimulatorCUDA final {
     unsigned n = num_qubits > k ? num_qubits - k : 0;
     unsigned size = unsigned{1} << n;
     unsigned threads = 32;
+
+#ifdef __HIP__
+    constexpr unsigned max_blocks = 65535;
+    unsigned num_iterations = (size + max_blocks - 1) / max_blocks;
+    unsigned blocks = (size + num_iterations - 1) / num_iterations;
+#else
     unsigned blocks = size;
+    unsigned num_iterations = 1;
+#endif
 
     IndicesLC<G> d_i(d_ws);
 
     ApplyControlledGateL_Kernel<G><<<blocks, threads>>>(
         (fp_type*) d_ws, d_i.xss, d_i.ms, d_i.qis, d_i.tis, d_i.cis,
         d.num_aqs + 1, d.cvalsh, 1 << d.num_effective_qs,
-        1 << (5 - d.remaining_low_cqs), state.get());
+        1 << (5 - d.remaining_low_cqs), num_iterations, state.get());
   }
 
   template <unsigned G>
