@@ -214,7 +214,8 @@ __global__ void Reduce2Kernel(
 }
 
 template <typename FP, unsigned warp_size = 32>
-__global__ void InternalToNormalOrderKernel(unsigned dblocks, FP* state) {
+__global__ __launch_bounds__(512)
+void InternalToNormalOrderKernel(unsigned dblocks, FP* state) {
   unsigned lane = threadIdx.x % warp_size;
   unsigned l = 2 * threadIdx.x - lane;
   uint64_t k0 = 2 * uint64_t{blockIdx.x} * dblocks * blockDim.x + l;
@@ -238,7 +239,8 @@ __global__ void InternalToNormalOrderKernel(unsigned dblocks, FP* state) {
 }
 
 template <typename FP, unsigned warp_size = 32>
-__global__ void NormalToInternalOrderKernel(unsigned dblocks, FP* state) {
+__global__ __launch_bounds__(512)
+void NormalToInternalOrderKernel(unsigned dblocks, FP* state) {
   unsigned lane = threadIdx.x % warp_size;
   unsigned l = 2 * threadIdx.x - lane;
   uint64_t k0 = 2 * uint64_t{blockIdx.x} * dblocks * blockDim.x + l;
@@ -262,7 +264,8 @@ __global__ void NormalToInternalOrderKernel(unsigned dblocks, FP* state) {
 }
 
 template <typename FP, unsigned warp_size = 32>
-__global__ void SetStateUniformKernel(unsigned dblocks, FP v, uint64_t size, FP* state) {
+__global__ __launch_bounds__(512)
+void SetStateUniformKernel(unsigned dblocks, FP v, uint64_t size, FP* state) {
   unsigned lane = threadIdx.x % warp_size;
   uint64_t k0 = 2 * (uint64_t{blockIdx.x} * dblocks * blockDim.x + threadIdx.x) - lane;
 
@@ -276,7 +279,8 @@ __global__ void SetStateUniformKernel(unsigned dblocks, FP v, uint64_t size, FP*
 }
 
 template <typename FP, unsigned warp_size = 32>
-__global__ void AddKernel(unsigned dblocks, const FP* state1, FP* state2) {
+__global__ __launch_bounds__(512)
+void AddKernel(unsigned dblocks, const FP* state1, FP* state2) {
   uint64_t k0 = uint64_t{blockIdx.x} * dblocks * blockDim.x + threadIdx.x;
 
   for (unsigned db = 0; db < dblocks; ++db) {
@@ -286,7 +290,8 @@ __global__ void AddKernel(unsigned dblocks, const FP* state1, FP* state2) {
 }
 
 template <typename FP, unsigned warp_size = 32>
-__global__ void MultiplyKernel(unsigned dblocks, FP a, FP* state) {
+__global__ __launch_bounds__(512)
+void MultiplyKernel(unsigned dblocks, FP a, FP* state) {
   uint64_t k0 = uint64_t{blockIdx.x} * dblocks * blockDim.x + threadIdx.x;
 
   for (unsigned db = 0; db < dblocks; ++db) {
@@ -296,7 +301,8 @@ __global__ void MultiplyKernel(unsigned dblocks, FP a, FP* state) {
 }
 
 template <typename FP, unsigned warp_size = 32>
-__global__ void CollapseKernel(unsigned dblocks, uint64_t mask, uint64_t bits, FP r, FP* state) {
+__global__ __launch_bounds__(512)
+void CollapseKernel(unsigned dblocks, uint64_t mask, uint64_t bits, FP r, FP* state) {
   unsigned lane = threadIdx.x % warp_size;
   uint64_t k1_base = uint64_t{blockIdx.x} * dblocks * blockDim.x + threadIdx.x;
 
@@ -315,7 +321,8 @@ __global__ void CollapseKernel(unsigned dblocks, uint64_t mask, uint64_t bits, F
 }
 
 template <typename FP, unsigned warp_size = 32>
-__global__ void BulkSetAmplKernel(
+__global__ __launch_bounds__(512)
+void BulkSetAmplKernel(
     unsigned dblocks, uint64_t mask, uint64_t bits, FP re, FP im, bool exclude, FP* state) {
   unsigned lane = threadIdx.x % warp_size;
   uint64_t k1_base = uint64_t{blockIdx.x} * dblocks * blockDim.x + threadIdx.x;
