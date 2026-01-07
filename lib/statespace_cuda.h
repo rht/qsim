@@ -85,11 +85,11 @@ class StateSpaceCUDA :
   void InternalToNormalOrder(State& state) const {
     uint64_t size = MinSize(state.num_qubits()) / 2;
     Grid g = GetGrid1(size);
+
+    fprintf(stderr, "DEBUG InternalToNormalOrder: qubits=%u size=%lu threads=%u dblocks=%u blocks=%u bytes=%lu\n",
+            state.num_qubits(), size, g.threads, g.dblocks, g.blocks, 2 * g.threads * sizeof(fp_type));
+
     unsigned bytes = 2 * g.threads * sizeof(fp_type);
-
-    fprintf(stderr, "DEBUG InternalToNormalOrder: qubits=%u size=%lu threads=%u dblocks=%u blocks=%u bytes=%u\n",
-            state.num_qubits(), size, g.threads, g.dblocks, g.blocks, bytes);
-
     InternalToNormalOrderKernel<<<g.blocks, g.threads, bytes>>>(g.dblocks, state.get());
     ErrorCheck(cudaPeekAtLastError());
     ErrorCheck(cudaDeviceSynchronize());
@@ -376,13 +376,20 @@ class StateSpaceCUDA :
 
   Grid GetGrid1(uint64_t size) const {
     Grid grid;
+    // Use conservative max_blocks to avoid launch failures on some hardware
+    // HIP/AMD may have practical limits lower than theoretical 2^31-1
+#ifdef __HIP__
     constexpr unsigned max_blocks = 65535;
+#else
+    constexpr unsigned max_blocks = 2147483647;
+#endif
 
     grid.threads = std::min(size, uint64_t{param_.num_threads});
-    // dblocks must be: >= min_dblocks (to keep blocks < 65536) AND <= size/threads (to keep blocks >= 1)
+    // Calculate minimum dblocks needed to keep blocks <= max_blocks
     // Use ceiling division: ceil(a/b) = (a + b - 1) / b
-    uint64_t min_dblocks = ((size / grid.threads) + max_blocks - 1) / max_blocks;
-    grid.dblocks = std::max(min_dblocks, std::min(size / grid.threads, uint64_t{param_.num_dblocks}));
+    uint64_t blocks_needed = size / grid.threads;
+    uint64_t min_dblocks = (blocks_needed + max_blocks - 1) / max_blocks;
+    grid.dblocks = std::max(min_dblocks, uint64_t{1});
     grid.blocks = size / (grid.threads * grid.dblocks);
 
     return grid;

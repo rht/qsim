@@ -17,8 +17,10 @@
 
 #ifdef __NVCC__
   #include <cuda.h>
+  constexpr unsigned kWarpSize = 32;
 #elif __HIP__
   #include <hip/hip_runtime.h>
+  constexpr unsigned kWarpSize = 64;  // AMD wavefront size
 #endif
 
 #include <cstdlib>
@@ -121,20 +123,34 @@ struct RealProduct {
   }
 };
 
-template <typename FP1, typename Op, unsigned warp_size = 32>
+// Use kWarpSize for actual GPU warp/wavefront reduction
+template <typename FP1, typename Op, unsigned warp_size = kWarpSize>
 __device__ __forceinline__ FP1 WarpReduce(FP1 val, Op op) {
+#ifdef __HIP__
+  // AMD uses 64-bit wavefronts
+  constexpr uint64_t mask = 0xffffffffffffffff;
+#else
+  constexpr unsigned mask = 0xffffffff;
+#endif
   for (unsigned i = warp_size / 2; i > 0; i /= 2) {
-    val = op(val, __shfl_down_sync(0xffffffff, val, i));
+    val = op(val, __shfl_down_sync(mask, val, i));
   }
 
   return val;
 }
 
-template <typename FP1, typename Op, unsigned warp_size = 32>
+// Use kWarpSize for actual GPU warp/wavefront reduction
+template <typename FP1, typename Op, unsigned warp_size = kWarpSize>
 __device__ __forceinline__ Complex<FP1> WarpReduce(Complex<FP1> val, Op op) {
+#ifdef __HIP__
+  // AMD uses 64-bit wavefronts
+  constexpr uint64_t mask = 0xffffffffffffffff;
+#else
+  constexpr unsigned mask = 0xffffffff;
+#endif
   for (unsigned i = warp_size / 2; i > 0; i /= 2) {
-    val.re = op(val.re, __shfl_down_sync(0xffffffff, val.re, i));
-    val.im = op(val.im, __shfl_down_sync(0xffffffff, val.im, i));
+    val.re = op(val.re, __shfl_down_sync(mask, val.re, i));
+    val.im = op(val.im, __shfl_down_sync(mask, val.im, i));
   }
 
   return val;

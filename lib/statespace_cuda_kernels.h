@@ -15,45 +15,46 @@
 #ifndef STATESPACE_CUDA_KERNELS_H_
 #define STATESPACE_CUDA_KERNELS_H_
 
-#ifdef __NVCC__
-  #include <cuda.h>
-#elif __HIP__
-  #include <hip/hip_runtime.h>
+// util_cuda.h defines kWarpSize (32 for NVIDIA, 64 for AMD)
+#include "util_cuda.h"
+
+#ifdef __HIP__
   #include "cuda2hip.h"
 #endif
-
-#include "util_cuda.h"
 
 namespace qsim {
 
 namespace detail {
 
+// Note: data_warp_size=32 for qsim's hardcoded state layout (32 reals + 32 imags)
+// hw_warp_size=kWarpSize for actual GPU warp/wavefront operations (32 on NVIDIA, 64 on AMD)
 template <typename FP1, typename FP2,
-          typename Op1, typename Op2, typename Op3, unsigned warp_size = 32>
+          typename Op1, typename Op2, typename Op3,
+          unsigned data_warp_size = 32, unsigned hw_warp_size = kWarpSize>
 __device__ __forceinline__ FP1 BlockReduce1(
     uint64_t n, Op1 op1, Op2 op2, Op3 op3, const FP2* s1, const FP2* s2) {
   extern __shared__ float shared[];
   FP1* partial1 = (FP1*) shared;
 
   unsigned tid = threadIdx.x;
-  unsigned warp = threadIdx.x / warp_size;
-  unsigned lane = threadIdx.x % warp_size;
+  unsigned warp = threadIdx.x / hw_warp_size;
+  unsigned lane = threadIdx.x % data_warp_size;
 
   uint64_t k0 = 2 * n * blockIdx.x * blockDim.x + 2 * tid - lane;
   uint64_t k1 = k0 + 2 * n * blockDim.x;
 
   FP1 r;
 
-  r = op1(s1[k0], s1[k0 + warp_size], s2[k0], s2[k0 + warp_size]);
+  r = op1(s1[k0], s1[k0 + data_warp_size], s2[k0], s2[k0 + data_warp_size]);
   while ((k0 += 2 * blockDim.x) < k1) {
-    r = op2(r, op1(s1[k0], s1[k0 + warp_size], s2[k0], s2[k0 + warp_size]));
+    r = op2(r, op1(s1[k0], s1[k0 + data_warp_size], s2[k0], s2[k0 + data_warp_size]));
   }
 
   partial1[tid] = r;
 
-  __shared__ FP1 partial2[warp_size];
+  __shared__ FP1 partial2[hw_warp_size];
 
-  if (tid < warp_size) {
+  if (tid < hw_warp_size) {
     partial2[tid] = 0;
   }
 
@@ -61,7 +62,7 @@ __device__ __forceinline__ FP1 BlockReduce1(
 
   FP1 val = WarpReduce(partial1[tid], op3);
 
-  if (lane == 0) {
+  if (threadIdx.x % hw_warp_size == 0) {
     partial2[warp] = val;
   }
 
@@ -69,15 +70,18 @@ __device__ __forceinline__ FP1 BlockReduce1(
 
   FP1 result = 0;
 
-  if (tid < warp_size) {
+  if (tid < hw_warp_size) {
     result = WarpReduce(partial2[tid], op3);
   }
 
   return result;
 }
 
+// Note: data_warp_size=32 for qsim's hardcoded state layout (32 reals + 32 imags)
+// hw_warp_size=kWarpSize for actual GPU warp/wavefront operations (32 on NVIDIA, 64 on AMD)
 template <typename FP1, typename FP2,
-          typename Op1, typename Op2, typename Op3, unsigned warp_size = 32>
+          typename Op1, typename Op2, typename Op3,
+          unsigned data_warp_size = 32, unsigned hw_warp_size = kWarpSize>
 __device__ __forceinline__ FP1 BlockReduce1Masked(
     uint64_t n, uint64_t mask, uint64_t bits, Op1 op1, Op2 op2, Op3 op3,
     const FP2* s1, const FP2* s2) {
@@ -85,8 +89,8 @@ __device__ __forceinline__ FP1 BlockReduce1Masked(
   FP1* partial1 = (FP1*) shared;
 
   unsigned tid = threadIdx.x;
-  unsigned warp = threadIdx.x / warp_size;
-  unsigned lane = threadIdx.x % warp_size;
+  unsigned warp = threadIdx.x / hw_warp_size;
+  unsigned lane = threadIdx.x % data_warp_size;
 
   uint64_t k0 = 2 * n * blockIdx.x * blockDim.x + 2 * tid - lane;
   uint64_t k1 = k0 + 2 * n * blockDim.x;
@@ -94,19 +98,19 @@ __device__ __forceinline__ FP1 BlockReduce1Masked(
   FP1 r = 0;
 
   if (((k0 + lane) / 2 & mask) == bits) {
-    r = op1(s1[k0], s1[k0 + warp_size], s2[k0], s2[k0 + warp_size]);
+    r = op1(s1[k0], s1[k0 + data_warp_size], s2[k0], s2[k0 + data_warp_size]);
   }
   while ((k0 += 2 * blockDim.x) < k1) {
     if (((k0 + lane) / 2 & mask) == bits) {
-      r = op2(r, op1(s1[k0], s1[k0 + warp_size], s2[k0], s2[k0 + warp_size]));
+      r = op2(r, op1(s1[k0], s1[k0 + data_warp_size], s2[k0], s2[k0 + data_warp_size]));
     }
   }
 
   partial1[tid] = r;
 
-  __shared__ FP1 partial2[warp_size];
+  __shared__ FP1 partial2[hw_warp_size];
 
-  if (tid < warp_size) {
+  if (tid < hw_warp_size) {
     partial2[tid] = 0;
   }
 
@@ -114,7 +118,7 @@ __device__ __forceinline__ FP1 BlockReduce1Masked(
 
   FP1 val = WarpReduce(partial1[tid], op3);
 
-  if (lane == 0) {
+  if (threadIdx.x % hw_warp_size == 0) {
     partial2[warp] = val;
   }
 
@@ -122,7 +126,7 @@ __device__ __forceinline__ FP1 BlockReduce1Masked(
 
   FP1 result = 0;
 
-  if (tid < warp_size) {
+  if (tid < hw_warp_size) {
     result = WarpReduce(partial2[tid], op3);
   }
 
@@ -130,7 +134,7 @@ __device__ __forceinline__ FP1 BlockReduce1Masked(
 }
 
 template <typename FP1, typename FP2,
-          typename Op2, typename Op3, unsigned warp_size = 32>
+          typename Op2, typename Op3, unsigned warp_size = kWarpSize>
 __device__ __forceinline__ FP1 BlockReduce2(
     uint64_t n, uint64_t size, Op2 op2, Op3 op3, const FP2* s) {
   extern __shared__ float shared[];
@@ -179,7 +183,7 @@ __device__ __forceinline__ FP1 BlockReduce2(
 }  // namespace detail
 
 template <typename FP1, typename FP2, typename FP3,
-          typename Op1, typename Op2, typename Op3, unsigned warp_size = 32>
+          typename Op1, typename Op2, typename Op3, unsigned warp_size = kWarpSize>
 __global__ void Reduce1Kernel(uint64_t n, Op1 op1, Op2 op2, Op3 op3,
                               const FP2* s1, const FP2* s2, FP3* result) {
   FP1 sum = detail::BlockReduce1<FP1>(n, op1, op2, op3, s1, s2);
@@ -190,7 +194,7 @@ __global__ void Reduce1Kernel(uint64_t n, Op1 op1, Op2 op2, Op3 op3,
 }
 
 template <typename FP1, typename FP2, typename FP3,
-          typename Op1, typename Op2, typename Op3, unsigned warp_size = 32>
+          typename Op1, typename Op2, typename Op3, unsigned warp_size = kWarpSize>
 __global__ void Reduce1MaskedKernel(uint64_t n, uint64_t mask, uint64_t bits,
                                     Op1 op1, Op2 op2, Op3 op3,
                                     const FP2* s1, const FP2* s2, FP3* result) {
@@ -203,7 +207,7 @@ __global__ void Reduce1MaskedKernel(uint64_t n, uint64_t mask, uint64_t bits,
 }
 
 template <typename FP1, typename FP2, typename FP3,
-          typename Op2, typename Op3, unsigned warp_size = 32>
+          typename Op2, typename Op3, unsigned warp_size = kWarpSize>
 __global__ void Reduce2Kernel(
     uint64_t n, uint64_t size, Op2 op2, Op3 op3, const FP2* s, FP3* result) {
   FP1 sum = detail::BlockReduce2<FP1>(n, size, op2, op3, s);
@@ -213,10 +217,13 @@ __global__ void Reduce2Kernel(
   }
 }
 
-template <typename FP, unsigned warp_size = 32>
-__global__ __launch_bounds__(512)
+// Note: This kernel uses data_warp_size=32 because qsim's state layout
+// is hardcoded to 32-element chunks (32 reals + 32 imags), regardless
+// of the GPU's actual wavefront/warp size.
+template <typename FP, unsigned data_warp_size = 32>
+__global__
 void InternalToNormalOrderKernel(unsigned dblocks, FP* state) {
-  unsigned lane = threadIdx.x % warp_size;
+  unsigned lane = threadIdx.x % data_warp_size;
   unsigned l = 2 * threadIdx.x - lane;
   uint64_t k0 = 2 * uint64_t{blockIdx.x} * dblocks * blockDim.x + l;
 
@@ -227,21 +234,24 @@ void InternalToNormalOrderKernel(unsigned dblocks, FP* state) {
     uint64_t k = k0 + 2 * uint64_t{db} * blockDim.x;
 
     buf[l] = state[k];
-    buf[l + warp_size] = state[k + warp_size];
+    buf[l + data_warp_size] = state[k + data_warp_size];
 
     __syncthreads();
 
     state[k + lane] = buf[l];
-    state[k + lane + 1] = buf[l + warp_size];
+    state[k + lane + 1] = buf[l + data_warp_size];
 
     __syncthreads();
   }
 }
 
-template <typename FP, unsigned warp_size = 32>
-__global__ __launch_bounds__(512)
+// Note: This kernel uses data_warp_size=32 because qsim's state layout
+// is hardcoded to 32-element chunks (32 reals + 32 imags), regardless
+// of the GPU's actual wavefront/warp size.
+template <typename FP, unsigned data_warp_size = 32>
+__global__
 void NormalToInternalOrderKernel(unsigned dblocks, FP* state) {
-  unsigned lane = threadIdx.x % warp_size;
+  unsigned lane = threadIdx.x % data_warp_size;
   unsigned l = 2 * threadIdx.x - lane;
   uint64_t k0 = 2 * uint64_t{blockIdx.x} * dblocks * blockDim.x + l;
 
@@ -252,34 +262,35 @@ void NormalToInternalOrderKernel(unsigned dblocks, FP* state) {
     uint64_t k = k0 + 2 * uint64_t{db} * blockDim.x;
 
     buf[l] = state[k];
-    buf[l + warp_size] = state[k + warp_size];
+    buf[l + data_warp_size] = state[k + data_warp_size];
 
     __syncthreads();
 
     state[k] = buf[l + lane];
-    state[k + warp_size] = buf[l + lane + 1];
+    state[k + data_warp_size] = buf[l + lane + 1];
 
     __syncthreads();
   }
 }
 
-template <typename FP, unsigned warp_size = 32>
-__global__ __launch_bounds__(512)
+// Note: data_warp_size=32 matches qsim's hardcoded state layout
+template <typename FP, unsigned data_warp_size = 32>
+__global__
 void SetStateUniformKernel(unsigned dblocks, FP v, uint64_t size, FP* state) {
-  unsigned lane = threadIdx.x % warp_size;
+  unsigned lane = threadIdx.x % data_warp_size;
   uint64_t k0 = 2 * (uint64_t{blockIdx.x} * dblocks * blockDim.x + threadIdx.x) - lane;
 
   for (unsigned db = 0; db < dblocks; ++db) {
     uint64_t k = k0 + 2 * uint64_t{db} * blockDim.x;
     uint64_t idx = uint64_t{blockIdx.x} * dblocks * blockDim.x + db * blockDim.x + threadIdx.x;
 
-    state[k] = (idx * warp_size + lane) < size ? v : 0;
-    state[k + warp_size] = 0;
+    state[k] = (idx * data_warp_size + lane) < size ? v : 0;
+    state[k + data_warp_size] = 0;
   }
 }
 
-template <typename FP, unsigned warp_size = 32>
-__global__ __launch_bounds__(512)
+template <typename FP>
+__global__
 void AddKernel(unsigned dblocks, const FP* state1, FP* state2) {
   uint64_t k0 = uint64_t{blockIdx.x} * dblocks * blockDim.x + threadIdx.x;
 
@@ -289,8 +300,8 @@ void AddKernel(unsigned dblocks, const FP* state1, FP* state2) {
   }
 }
 
-template <typename FP, unsigned warp_size = 32>
-__global__ __launch_bounds__(512)
+template <typename FP>
+__global__
 void MultiplyKernel(unsigned dblocks, FP a, FP* state) {
   uint64_t k0 = uint64_t{blockIdx.x} * dblocks * blockDim.x + threadIdx.x;
 
@@ -300,10 +311,11 @@ void MultiplyKernel(unsigned dblocks, FP a, FP* state) {
   }
 }
 
-template <typename FP, unsigned warp_size = 32>
-__global__ __launch_bounds__(512)
+// Note: data_warp_size=32 matches qsim's hardcoded state layout
+template <typename FP, unsigned data_warp_size = 32>
+__global__
 void CollapseKernel(unsigned dblocks, uint64_t mask, uint64_t bits, FP r, FP* state) {
-  unsigned lane = threadIdx.x % warp_size;
+  unsigned lane = threadIdx.x % data_warp_size;
   uint64_t k1_base = uint64_t{blockIdx.x} * dblocks * blockDim.x + threadIdx.x;
 
   for (unsigned db = 0; db < dblocks; ++db) {
@@ -312,19 +324,20 @@ void CollapseKernel(unsigned dblocks, uint64_t mask, uint64_t bits, FP r, FP* st
 
     if ((k1 & mask) == bits) {
       state[k2] *= r;
-      state[k2 + warp_size] *= r;
+      state[k2 + data_warp_size] *= r;
     } else {
       state[k2] = 0;
-      state[k2 + warp_size] = 0;
+      state[k2 + data_warp_size] = 0;
     }
   }
 }
 
-template <typename FP, unsigned warp_size = 32>
-__global__ __launch_bounds__(512)
+// Note: data_warp_size=32 matches qsim's hardcoded state layout
+template <typename FP, unsigned data_warp_size = 32>
+__global__
 void BulkSetAmplKernel(
     unsigned dblocks, uint64_t mask, uint64_t bits, FP re, FP im, bool exclude, FP* state) {
-  unsigned lane = threadIdx.x % warp_size;
+  unsigned lane = threadIdx.x % data_warp_size;
   uint64_t k1_base = uint64_t{blockIdx.x} * dblocks * blockDim.x + threadIdx.x;
 
   for (unsigned db = 0; db < dblocks; ++db) {
@@ -335,12 +348,13 @@ void BulkSetAmplKernel(
 
     if (set) {
       state[k2] = re;
-      state[k2 + warp_size] = im;
+      state[k2 + data_warp_size] = im;
     }
   }
 }
 
-template <typename FP1, typename FP2, typename FP3, unsigned warp_size = 32>
+// Note: data_warp_size=32 matches qsim's hardcoded state layout (64 * (k / 32) + k % 32)
+template <typename FP1, typename FP2, typename FP3, unsigned data_warp_size = 32>
 __global__ void SampleKernel(unsigned num_blocks,
                              uint64_t n, uint64_t num_samples,
                              const FP1* rs, const FP2* ps, const FP3* state,
@@ -357,7 +371,7 @@ __global__ void SampleKernel(unsigned num_blocks,
       for (uint64_t k = 0; k < km; ++k) {
         uint64_t l = 2 * k0 + 64 * (k / 32) + k % 32;
         FP3 re = state[l];
-        FP3 im = state[l + warp_size];
+        FP3 im = state[l + data_warp_size];
         csum += re * re + im * im;
         while (m < num_samples && rs[m] < csum) {
           bitstrings[m++] = k0 + k;
@@ -367,7 +381,8 @@ __global__ void SampleKernel(unsigned num_blocks,
   }
 }
 
-template <typename FP, unsigned warp_size = 32>
+// Note: data_warp_size=32 matches qsim's hardcoded state layout (64 * (k / 32) + k % 32)
+template <typename FP, unsigned data_warp_size = 32>
 __global__ void FindMeasuredBitsKernel(
     uint64_t block_id, uint64_t n, double r, const FP* state, uint64_t* res) {
   // Use just one thread. This can be somewhat slow, however, this is
@@ -380,7 +395,7 @@ __global__ void FindMeasuredBitsKernel(
     for (uint64_t k = 0; k < km; ++k) {
       uint64_t l = 2 * k0 + 64 * (k / 32) + k % 32;
       FP re = state[l];
-      FP im = state[l + warp_size];
+      FP im = state[l + data_warp_size];
       csum += re * re + im * im;
       if (r < csum) {
         *res = k0 + k;
