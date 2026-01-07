@@ -394,7 +394,7 @@ std::vector<std::complex<float>> qsim_simulate(const py::dict &options) {
   unsigned gpu_mode;
   unsigned num_sim_threads = 0;
   unsigned num_state_threads = 0;
-  unsigned num_dblocks = 0;
+  unsigned num_dblocks = 16;
   RunnerParameter param;
   try {
     use_gpu = parseOptions<unsigned>(options, "g\0");
@@ -455,7 +455,7 @@ std::vector<std::complex<float>> qtrajectory_simulate(const py::dict &options) {
   unsigned gpu_mode;
   unsigned num_sim_threads = 0;
   unsigned num_state_threads = 0;
-  unsigned num_dblocks = 0;
+  unsigned num_dblocks = 16;
   uint64_t seed;
 
   try {
@@ -1004,7 +1004,7 @@ std::vector<unsigned> qsim_sample(const py::dict &options) {
   unsigned gpu_mode;
   unsigned num_sim_threads = 0;
   unsigned num_state_threads = 0;
-  unsigned num_dblocks = 0;
+  unsigned num_dblocks = 16;
   RunnerParameter param;
   try {
     use_gpu = parseOptions<unsigned>(options, "g\0");
@@ -1070,7 +1070,7 @@ std::vector<unsigned> qtrajectory_sample(const py::dict &options) {
   unsigned gpu_mode;
   unsigned num_sim_threads = 0;
   unsigned num_state_threads = 0;
-  unsigned num_dblocks = 0;
+  unsigned num_dblocks = 16;
   uint64_t seed;
 
   try {

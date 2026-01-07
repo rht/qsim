@@ -84,26 +84,23 @@ class StateSpaceCUDA :
 
   void InternalToNormalOrder(State& state) const {
     uint64_t size = MinSize(state.num_qubits()) / 2;
+    Grid g = GetGrid1(size);
+    unsigned bytes = 2 * g.threads * sizeof(fp_type);
 
-    unsigned threads = std::min(size, uint64_t{param_.num_threads});
-    unsigned dblocks = std::min(size / threads, uint64_t{param_.num_dblocks});
-    unsigned blocks = size / (threads * dblocks);
-    unsigned bytes = 2 * threads * sizeof(fp_type);
+    fprintf(stderr, "DEBUG InternalToNormalOrder: qubits=%u size=%lu threads=%u dblocks=%u blocks=%u bytes=%u\n",
+            state.num_qubits(), size, g.threads, g.dblocks, g.blocks, bytes);
 
-    InternalToNormalOrderKernel<<<blocks, threads, bytes>>>(dblocks, state.get());
+    InternalToNormalOrderKernel<<<g.blocks, g.threads, bytes>>>(g.dblocks, state.get());
     ErrorCheck(cudaPeekAtLastError());
     ErrorCheck(cudaDeviceSynchronize());
   }
 
   void NormalToInternalOrder(State& state) const {
     uint64_t size = MinSize(state.num_qubits()) / 2;
+    Grid g = GetGrid1(size);
+    unsigned bytes = 2 * g.threads * sizeof(fp_type);
 
-    unsigned threads = std::min(size, uint64_t{param_.num_threads});
-    unsigned dblocks = std::min(size / threads, uint64_t{param_.num_dblocks});
-    unsigned blocks = size / (threads * dblocks);
-    unsigned bytes = 2 * threads * sizeof(fp_type);
-
-    NormalToInternalOrderKernel<<<blocks, threads, bytes>>>(dblocks, state.get());
+    NormalToInternalOrderKernel<<<g.blocks, g.threads, bytes>>>(g.dblocks, state.get());
     ErrorCheck(cudaPeekAtLastError());
     ErrorCheck(cudaDeviceSynchronize());
   }
@@ -117,14 +114,11 @@ class StateSpaceCUDA :
   void SetStateUniform(State& state) const {
     uint64_t size = MinSize(state.num_qubits()) / 2;
     uint64_t hsize = uint64_t{1} << state.num_qubits();
-
-    unsigned threads = std::min(size, uint64_t{param_.num_threads});
-    unsigned dblocks = std::min(size / threads, uint64_t{param_.num_dblocks});
-    unsigned blocks = size / (threads * dblocks);
+    Grid g = GetGrid1(size);
 
     fp_type v = double{1} / std::sqrt(hsize);
 
-    SetStateUniformKernel<<<blocks, threads>>>(dblocks, v, hsize, state.get());
+    SetStateUniformKernel<<<g.blocks, g.threads>>>(g.dblocks, v, hsize, state.get());
     ErrorCheck(cudaPeekAtLastError());
     ErrorCheck(cudaDeviceSynchronize());
   }
@@ -179,13 +173,10 @@ class StateSpaceCUDA :
   void BulkSetAmpl(State& state, uint64_t mask, uint64_t bits, fp_type re,
                    fp_type im, bool exclude = false) const {
     uint64_t size = MinSize(state.num_qubits()) / 2;
+    Grid g = GetGrid1(size);
 
-    unsigned threads = std::min(size, uint64_t{param_.num_threads});
-    unsigned dblocks = std::min(size / threads, uint64_t{param_.num_dblocks});
-    unsigned blocks = size / (threads * dblocks);
-
-    BulkSetAmplKernel<<<blocks, threads>>>(
-        dblocks, mask, bits, re, im, exclude, state.get());
+    BulkSetAmplKernel<<<g.blocks, g.threads>>>(
+        g.dblocks, mask, bits, re, im, exclude, state.get());
     ErrorCheck(cudaPeekAtLastError());
     ErrorCheck(cudaDeviceSynchronize());
   }
@@ -197,12 +188,9 @@ class StateSpaceCUDA :
     }
 
     uint64_t size = MinSize(src.num_qubits());
+    Grid g = GetGrid1(size);
 
-    unsigned threads = std::min(size, uint64_t{param_.num_threads});
-    unsigned dblocks = std::min(size / threads, uint64_t{param_.num_dblocks});
-    unsigned blocks = size / (threads * dblocks);
-
-    AddKernel<<<blocks, threads>>>(dblocks, src.get(), dest.get());
+    AddKernel<<<g.blocks, g.threads>>>(g.dblocks, src.get(), dest.get());
     ErrorCheck(cudaPeekAtLastError());
     ErrorCheck(cudaDeviceSynchronize());
 
@@ -212,12 +200,9 @@ class StateSpaceCUDA :
   // Does the equivalent of state *= a elementwise.
   void Multiply(fp_type a, State& state) const {
     uint64_t size = MinSize(state.num_qubits());
+    Grid g = GetGrid1(size);
 
-    unsigned threads = std::min(size, uint64_t{param_.num_threads});
-    unsigned dblocks = std::min(size / threads, uint64_t{param_.num_dblocks});
-    unsigned blocks = size / (threads * dblocks);
-
-    MultiplyKernel<<<blocks, threads>>>(dblocks, a, state.get());
+    MultiplyKernel<<<g.blocks, g.threads>>>(g.dblocks, a, state.get());
     ErrorCheck(cudaPeekAtLastError());
     ErrorCheck(cudaDeviceSynchronize());
   }
@@ -323,12 +308,9 @@ class StateSpaceCUDA :
     fp_type renorm = 1 / std::sqrt(r);
 
     uint64_t size = MinSize(state.num_qubits()) / 2;
+    Grid g = GetGrid1(size);
 
-    unsigned threads = std::min(size, uint64_t{param_.num_threads});
-    unsigned dblocks = std::min(size / threads, uint64_t{param_.num_dblocks});
-    unsigned blocks = size / (threads * dblocks);
-
-    CollapseKernel<<<blocks, threads>>>(dblocks, mr.mask, mr.bits, renorm, state.get());
+    CollapseKernel<<<g.blocks, g.threads>>>(g.dblocks, mr.mask, mr.bits, renorm, state.get());
     ErrorCheck(cudaPeekAtLastError());
     ErrorCheck(cudaDeviceSynchronize());
   }
@@ -394,9 +376,13 @@ class StateSpaceCUDA :
 
   Grid GetGrid1(uint64_t size) const {
     Grid grid;
+    constexpr unsigned max_blocks = 65535;
 
     grid.threads = std::min(size, uint64_t{param_.num_threads});
-    grid.dblocks = std::min(size / grid.threads, uint64_t{param_.num_dblocks});
+    // dblocks must be: >= min_dblocks (to keep blocks < 65536) AND <= size/threads (to keep blocks >= 1)
+    // Use ceiling division: ceil(a/b) = (a + b - 1) / b
+    uint64_t min_dblocks = ((size / grid.threads) + max_blocks - 1) / max_blocks;
+    grid.dblocks = std::max(min_dblocks, std::min(size / grid.threads, uint64_t{param_.num_dblocks}));
     grid.blocks = size / (grid.threads * grid.dblocks);
 
     return grid;
