@@ -84,13 +84,30 @@ class StateSpaceCUDA :
 
   void InternalToNormalOrder(State& state) const {
     uint64_t size = MinSize(state.num_qubits()) / 2;
-    Grid g = GetGrid1(size);
+
+    // For HIP/AMD, use smaller thread count to avoid occupancy issues
+#ifdef __HIP__
+    unsigned threads = 64;  // Try 256 instead of 512
+#else
+    unsigned threads = param_.num_threads;
+#endif
+
+    // Calculate grid with the specific thread count
+    uint64_t blocks_needed = size / threads;
+#ifdef __HIP__
+    constexpr unsigned max_blocks = 65535;
+#else
+    constexpr unsigned max_blocks = 2147483647;
+#endif
+    unsigned dblocks = (blocks_needed + max_blocks - 1) / max_blocks;
+    if (dblocks < 1) dblocks = 1;
+    unsigned blocks = size / (threads * dblocks);
 
     fprintf(stderr, "DEBUG InternalToNormalOrder: qubits=%u size=%lu threads=%u dblocks=%u blocks=%u bytes=%lu\n",
-            state.num_qubits(), size, g.threads, g.dblocks, g.blocks, 2 * g.threads * sizeof(fp_type));
+            state.num_qubits(), size, threads, dblocks, blocks, 2 * threads * sizeof(fp_type));
 
-    unsigned bytes = 2 * g.threads * sizeof(fp_type);
-    InternalToNormalOrderKernel<<<g.blocks, g.threads, bytes>>>(g.dblocks, state.get());
+    unsigned bytes = 2 * threads * sizeof(fp_type);
+    InternalToNormalOrderKernel<<<blocks, threads, bytes>>>(dblocks, state.get());
     ErrorCheck(cudaPeekAtLastError());
     ErrorCheck(cudaDeviceSynchronize());
   }
