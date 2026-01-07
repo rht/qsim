@@ -23,6 +23,7 @@
   #include "cuda2hip.h"
 #endif
 
+#include <cstdio>
 #include <memory>
 #include <utility>
 
@@ -130,11 +131,14 @@ class VectorSpaceCUDA {
   // It is the client's responsibility to make sure that dest has at least
   // Impl::MinSize(src.num_qubits()) elements.
   bool Copy(const Vector& src, fp_type* dest) const {
-    ErrorCheck(
-        cudaMemcpy(dest, src.get(),
-                   sizeof(fp_type) * Impl::MinSize(src.num_qubits()),
-                   cudaMemcpyDeviceToHost));
+    uint64_t bytes = sizeof(fp_type) * Impl::MinSize(src.num_qubits());
+    fprintf(stderr, "DEBUG Copy GPU->Host: qubits=%u bytes=%lu (%.1f GB)\n",
+            src.num_qubits(), bytes, bytes / 1e9);
 
+    ErrorCheck(
+        cudaMemcpy(dest, src.get(), bytes, cudaMemcpyDeviceToHost));
+
+    fprintf(stderr, "DEBUG Copy GPU->Host: completed successfully\n");
     return true;
   }
 

@@ -112,8 +112,12 @@ class StateSpaceCUDA :
             state.num_qubits(), size, threads, dblocks, blocks, bytes);
 
     InternalToNormalOrderKernel<<<blocks, threads, bytes>>>(dblocks, state_size, state.get());
-    ErrorCheck(cudaPeekAtLastError());
+    cudaError_t launch_err = cudaPeekAtLastError();
+    fprintf(stderr, "DEBUG InternalToNormalOrder: kernel launched, error=%s\n", cudaGetErrorString(launch_err));
+    ErrorCheck(launch_err);
+
     ErrorCheck(cudaDeviceSynchronize());
+    fprintf(stderr, "DEBUG InternalToNormalOrder: kernel completed successfully\n");
   }
 
   void NormalToInternalOrder(State& state) const {
